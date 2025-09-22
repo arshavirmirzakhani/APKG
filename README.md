@@ -8,11 +8,11 @@ It provides **fast file access**, an **extensible structure**, and optional **XS
 ---
 
 ## ✨ Features
-🔹 Simple, predictable binary layout (easy to parse in C++)
-🔹 Fast random file access (no extraction required)
-🔹 Optional strong encryption (libsodium, XSalsa20 + Poly1305)
-🔹 Designed for mods and game engine workflows
-🔹 Open and extensible (MIT licensed)
+- 🔹 Simple, predictable binary layout (easy to parse in C++)
+- 🔹 Fast random file access (no extraction required)
+- 🔹 Optional strong encryption (libsodium, XSalsa20 + Poly1305)
+- 🔹 Designed for mods and game engine workflows
+- 🔹 Open and extensible (MIT licensed)
 
 ---
 
