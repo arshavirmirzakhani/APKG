@@ -79,33 +79,62 @@ If the `FLAG_ENCRYPTED` bit is set, the block must be decrypted before parsing.
 ### C++
 
 ```c++
-#include "apkg_writer.h"
+#include "apkg.h"
 #include <iostream>
 #include <sodium.h>
+#include <string>
+#include <vector>
 
 int main() {
-    if (sodium_init() < 0) {
-        std::cerr << "Failed to initialize libsodium!" << std::endl;
-        return 1;
-    }
+	if (sodium_init() < 0) {
+		std::cerr << "libsodium initialization failed!" << std::endl;
+		return 1;
+	}
 
-    try {
-        // Create an archive with optional password encryption
-        APKGWriterV1 writer("example.apkg", "ASTAR_DEV", "mypassword");
+	// ---------------------------
+	// Create an APKG archive
+	// ---------------------------
+	try {
+		APKGWriterV1 writer("example.apkg", "ARSHAVIR", ""); // No password encryption
 
-        // Add files
-        writer.add_file("test.txt");
-        writer.add_file("image.png");
+		// Add files to the archive
+		writer.add_file("test.txt"); // Text file
 
-        // Save archive
-        writer.save();
+		// Save the archive to disk
+		writer.save();
+		std::cout << "Archive created successfully." << std::endl;
+	} catch (const std::exception& e) {
+		std::cerr << "Error creating archive: " << e.what() << std::endl;
+		return 1;
+	}
 
-        std::cout << "Archive created successfully!" << std::endl;
-    } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
-        return 1;
-    }
+	// ---------------------------
+	// Read from the archive
+	// ---------------------------
+	try {
+		APKGReaderV1 reader("example.apkg", ""); // Password empty
 
-    return 0;
+		// Read a single file
+		std::vector<uint8_t> textData = reader.read_file("test.txt");
+
+		std::cout << "--- Contents of test.txt ---" << std::endl;
+		// Properly print text without garbage
+		std::cout.write(reinterpret_cast<const char*>(textData.data()), textData.size());
+		std::cout << std::endl << "-----------------------------" << std::endl;
+
+		// Extract all files to a folder
+		reader.extract_all("extracted_files");
+		std::cout << "All files extracted to 'extracted_files/' folder." << std::endl;
+
+		// Optional: print metadata
+		std::cout << "Archive Developer Signature: " << reader.get_dev_signature() << std::endl;
+		std::cout << "Archive Version: " << reader.get_version() << std::endl;
+		std::cout << "Encrypted? " << (reader.is_encrypted() ? "Yes" : "No") << std::endl;
+	} catch (const std::exception& e) {
+		std::cerr << "Error reading archive: " << e.what() << std::endl;
+		return 1;
+	}
+
+	return 0;
 }
 ```
