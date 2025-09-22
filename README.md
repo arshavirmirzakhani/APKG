@@ -3,16 +3,16 @@
 [![Made with ❤️ by Arshavir](https://img.shields.io/badge/Made%20by-Arshavir%20Mirzakhani-red)](#)
 
 **APKG (Arshavir Package Format)** is a lightweight, open-source, and mod-friendly archive format designed for game engines.  
-It provides **fast file access**, an **extensible structure**, and optional **AES-256-GCM encryption** for protecting assets using [libsodium](https://doc.libsodium.org/).
+It provides **fast file access**, an **extensible structure**, and optional **XSalsa20+Poly1305 encryption** for protecting assets using [libsodium](https://doc.libsodium.org/).
 
 ---
 
 ## ✨ Features
-- 🔹 Simple, predictable binary layout (easy to parse in C++, Python, etc.)
-- 🔹 Fast random file access (no extraction required)
-- 🔹 Optional strong encryption (libsodium, AES-256-GCM)
-- 🔹 Designed for **mods and game engine workflows** in mind
-- 🔹 Open and extensible (MIT licensed)
+🔹 Simple, predictable binary layout (easy to parse in C++)
+🔹 Fast random file access (no extraction required)
+🔹 Optional strong encryption (libsodium, XSalsa20 + Poly1305)
+🔹 Designed for mods and game engine workflows
+🔹 Open and extensible (MIT licensed)
 
 ---
 
@@ -25,15 +25,15 @@ An **APKG** file consists of three main parts:
 
 
 ### **1. Header**
-| Field             | Type     | Description                        |
-|-------------------|----------|------------------------------------|
-| Magic             | char[4]  | Always `"APKG"`                    |
-| Version           | uint32   | Format version (e.g. `1`)          |
-| Flags             | uint32   | `0x1 = Encrypted`, else `0`        |
-| DevSigLen         | uint32   | Length of developer signature      |
-| DevSignature      | bytes    | Developer string (e.g. `"ASTAR"`) |
-| FileCount         | uint32   | Number of files in package         |
-| FileTableOffset   | uint64   | Absolute offset of block start     |
+| Field             | Type     | Description                            |
+|-------------------|----------|----------------------------------------|
+| Magic             | char[4]  | Always `"APKG"`                        |
+| Version           | uint32   | Format version (e.g. `1`)              |
+| Flags             | uint32   | `0x1 = Encrypted`, else `0`            |
+| DevSigLen         | uint32   | Length of developer signature          |
+| DevSignature      | bytes    | Developer string (e.g. `"SIGNATURE"`)  |
+| FileCount         | uint32   | Number of files in package             |
+| FileTableOffset   | uint64   | Absolute offset of block start         |
 
 ---
 
@@ -41,8 +41,8 @@ An **APKG** file consists of three main parts:
 | Field     | Type   | Description                           |
 |-----------|--------|---------------------------------------|
 | SaltLen   | uint32 | Length of salt                        |
-| Salt      | bytes  | Random salt for PBKDF2 key derivation |
-| NonceLen  | uint32 | Length of AES-GCM nonce               |
+| Salt      | bytes  | Random salt for Argon2 key derivation |
+| NonceLen  | uint32 | Length of XSalsa20+Poly1305 nonce     |
 | Nonce     | bytes  | Random nonce for encryption           |
 
 ---
@@ -66,8 +66,8 @@ Offsets in the file table point into this region.
 
 ## 🔐 Encryption
 - Optional per-package encryption (entire block is encrypted as one).  
-- **Algorithm**: AES-256-GCM (with authentication).  
-- **Key derivation**: PBKDF2-HMAC-SHA256 using the provided password and stored salt.  
+- **Algorithm**: XSalsa20 + Poly1305 via libsodium crypto_secretbox.
+- **Key derivation**: Argon2i using provided password and stored salt.
 - **Nonce**: Random, stored in `HeaderExtra`.  
 
 If the `FLAG_ENCRYPTED` bit is set, the block must be decrypted before parsing.
@@ -76,17 +76,36 @@ If the `FLAG_ENCRYPTED` bit is set, the block must be decrypted before parsing.
 
 ## 🚀 Example Usage
 
-### Python
+### C++
 
-```python
-import apkg
+```c++
+#include "apkg_writer.h"
+#include <iostream>
+#include <sodium.h>
 
-writer = apkg.APKGWriterV1("example.apkg") # Create an Package
+int main() {
+    if (sodium_init() < 0) {
+        std::cerr << "Failed to initialize libsodium!" << std::endl;
+        return 1;
+    }
 
-writer.add_file("text.txt") # Add a file to it
-writer.save() # Save it into disk
+    try {
+        // Create an archive with optional password encryption
+        APKGWriterV1 writer("example.apkg", "ASTAR_DEV", "mypassword");
 
-reader = apkg.APKGReader("example.apkg") # Import an Package
+        // Add files
+        writer.add_file("test.txt");
+        writer.add_file("image.png");
 
-print(reader.read_file("test.txt")) # Read an file into memory
+        // Save archive
+        writer.save();
+
+        std::cout << "Archive created successfully!" << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
+    }
+
+    return 0;
+}
 ```
