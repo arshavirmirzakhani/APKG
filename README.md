@@ -74,3 +74,19 @@ If the `FLAG_ENCRYPTED` bit is set, the block must be decrypted before parsing.
 
 ---
 
+## 🚀 Example Usage
+
+### Python
+
+```python
+import apkg
+
+writer = apkg.APKGWriterV1("example.apkg") # Create an Package
+
+writer.add_file("text.txt") # Add a file to it
+writer.save() # Save it into disk
+
+reader = apkg.APKGReader("example.apkg") # Import an Package
+
+print(reader.read_file("test.txt")) # Read an file into memory
+```
