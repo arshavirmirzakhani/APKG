@@ -36,9 +36,9 @@ class APKGWriter {
 	public:
 		/// Constructor
 		/// @param p Path to save the archive
-		/// @param sig Developer signature (default "SIGNATURE")
+		/// @param sig Developer signature (default "")
 		/// @param pwd Optional password for encryption
-		APKGWriter(const std::string& p, const std::string& sig = "SIGNATURE", const std::string& pwd = "") : path(p), dev_sig(sig), password(pwd) {}
+		APKGWriter(const std::string& p, const std::string& sig = "", const std::string& pwd = "") : path(p), dev_sig(sig), password(pwd) {}
 
 		/// Add a file to the archive
 		/// @param filepath Path to the source file
