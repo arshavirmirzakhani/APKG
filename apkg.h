@@ -1,3 +1,10 @@
+/*
+====================================================
+APKG — Arshavir Package Format
+MIT License - Copyright (c) 2025 arshavir mirzakhani
+====================================================
+*/
+
 #pragma once
 
 #include <cstdint>
