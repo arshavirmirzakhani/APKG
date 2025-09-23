@@ -95,7 +95,7 @@ int main() {
 	// Create an APKG archive
 	// ---------------------------
 	try {
-		APKGWriterV1 writer("example.apkg", "ARSHAVIR", ""); // No password encryption
+		APKGWriter writer("example.apkg", "ARSHAVIR", ""); // No password encryption
 
 		// Add files to the archive
 		writer.add_file("test.txt"); // Text file
@@ -112,7 +112,7 @@ int main() {
 	// Read from the archive
 	// ---------------------------
 	try {
-		APKGReaderV1 reader("example.apkg", ""); // Password empty
+		APKGReader reader("example.apkg", ""); // Password empty
 
 		// Read a single file
 		std::vector<uint8_t> textData = reader.read_file("test.txt");

@@ -27,7 +27,7 @@ struct FileEntry {
 /// This class provides functionality to create APKG archives with optional
 /// encryption. Encryption uses libsodium SecretBox (XSalsa20 + Poly1305) with
 /// Argon2i key derivation.
-class APKGWriterV1 {
+class APKGWriter {
 		std::string path;	      // Path to save the archive
 		std::string dev_sig;	      // Developer signature stored in archive header
 		std::vector<FileEntry> files; // List of files to include in the archive
@@ -38,7 +38,7 @@ class APKGWriterV1 {
 		/// @param p Path to save the archive
 		/// @param sig Developer signature (default "SIGNATURE")
 		/// @param pwd Optional password for encryption
-		APKGWriterV1(const std::string& p, const std::string& sig = "SIGNATURE", const std::string& pwd = "") : path(p), dev_sig(sig), password(pwd) {}
+		APKGWriter(const std::string& p, const std::string& sig = "SIGNATURE", const std::string& pwd = "") : path(p), dev_sig(sig), password(pwd) {}
 
 		/// Add a file to the archive
 		/// @param filepath Path to the source file
@@ -166,7 +166,7 @@ struct FileEntryRead {
 /// This class provides functionality to read APKG archives (V1) created
 /// with APKGWriterV1. It supports optional decryption using XSalsa20+Poly1305
 /// with Argon2i key derivation.
-class APKGReaderV1 {
+class APKGReader {
 		std::string path;		  // Archive file path
 		std::vector<FileEntryRead> files; // List of file entries
 		std::vector<uint8_t> data_block;  // Concatenated file data
@@ -178,7 +178,7 @@ class APKGReaderV1 {
 		/// Constructor
 		/// @param p Archive file path
 		/// @param password Optional password for decryption if archive is encrypted
-		APKGReaderV1(const std::string& p, const std::string& password = "") : path(p) {
+		APKGReader(const std::string& p, const std::string& password = "") : path(p) {
 			std::ifstream in(path, std::ios::binary);
 			if (!in) throw std::runtime_error("Failed to open file: " + path);
 
