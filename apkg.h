@@ -22,7 +22,7 @@ struct FileEntry {
 		std::vector<uint8_t> data; // File content
 };
 
-/// APKGWriterV1 class
+/// APKGWriter class
 ///
 /// This class provides functionality to create APKG archives with optional
 /// encryption. Encryption uses libsodium SecretBox (XSalsa20 + Poly1305) with
@@ -161,7 +161,7 @@ struct FileEntryRead {
 		uint64_t size;	  // File size
 };
 
-/// APKGReaderV1 class
+/// APKGReader class
 ///
 /// This class provides functionality to read APKG archives (V1) created
 /// with APKGWriterV1. It supports optional decryption using XSalsa20+Poly1305
