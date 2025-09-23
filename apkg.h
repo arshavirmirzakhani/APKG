@@ -163,9 +163,10 @@ struct FileEntryRead {
 
 /// APKGReader class
 ///
-/// This class provides functionality to read APKG archives (V1) created
-/// with APKGWriterV1. It supports optional decryption using XSalsa20+Poly1305
-/// with Argon2i key derivation.
+/// This class provides functionality to read APKG archives with optional
+/// Decryption if password provided. Decryption uses libsodium SecretBox (XSalsa20 + Poly1305) with
+/// Argon2i key derivation.
+
 class APKGReader {
 		std::string path;		  // Archive file path
 		std::vector<FileEntryRead> files; // List of file entries
