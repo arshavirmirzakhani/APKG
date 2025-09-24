@@ -3,7 +3,7 @@
 [![Made with ❤️ by Arshavir](https://img.shields.io/badge/Made%20by-Arshavir%20Mirzakhani-red)](#)
 
 **APKG (Arshavir Package Format)** is a lightweight, open-source, and mod-friendly archive format designed for game engines.  
-It provides **fast file access**, an **extensible structure**, and optional **XSalsa20+Poly1305 encryption** for protecting assets using [libsodium](https://doc.libsodium.org/).
+It provides **fast file access**, an **extensible structure**, and optional **XSalsa20+Poly1305 encryption** for protecting assets using [libsodium](https://doc.libsodium.org/) and **per-file compression** using [zlib](https://zlib.net/).
 
 ---
 
@@ -23,13 +23,34 @@ An **APKG** file consists of three main parts:
 2. HeaderExtra (optional)
 3. Block (file table + data)
 
+### Diagram of format structure
+```
++-------------------+
+| Header            |
++-------------------+
+| HeaderExtra (opt) |
++-------------------+
+| Block             |
+|  +-------------+  |
+|  | File Table  |  |
+|  +-------------+  |
+|  | File Data   |  |
+|  +-------------+  |
+|  +-------------+  |
+|  | File Table  |  |
+|  +-------------+  |
+|  | File Data   |  |
+|  +-------------+  |
++-------------------+
+```
+
 
 ### **1. Header**
 | Field             | Type     | Description                            |
 |-------------------|----------|----------------------------------------|
 | Magic             | char[4]  | Always `"APKG"`                        |
 | Version           | uint32   | Format version (e.g. `1`)              |
-| Flags             | uint32   | `0x1 = Encrypted`, else `0`            |
+| Flags             | uint32   | `0x1 = Encrypted`, `0x2 = Compressed`  |
 | DevSigLen         | uint32   | Length of developer signature          |
 | DevSignature      | bytes    | Developer string (e.g. `"SIGNATURE"`)  |
 | FileCount         | uint32   | Number of files in package             |
@@ -37,7 +58,7 @@ An **APKG** file consists of three main parts:
 
 ---
 
-### **2. HeaderExtra (only if encrypted)**
+### **2. HeaderExtra (only if FLAG_ENCRYPTED is set)**
 | Field     | Type   | Description                           |
 |-----------|--------|---------------------------------------|
 | SaltLen   | uint32 | Length of salt                        |
@@ -51,26 +72,36 @@ An **APKG** file consists of three main parts:
 The block contains both the **file table** and **file data**.
 
 #### File Table (per file entry):
-| Field     | Type     | Description                          |
-|-----------|----------|--------------------------------------|
-| NameLen   | uint32   | Length of filename                   |
-| Name      | bytes    | Filename (UTF-8)                     |
-| Offset    | uint64   | Offset relative to start of dataBlock|
-| Size      | uint64   | File size in bytes                   |
+| Field        | Type   | Description                                     |
+| ------------ | ------ | ----------------------------------------------- |
+| NameLen      | uint32 | Length of filename (UTF-8)                      |
+| Name         | bytes  | Filename (supports subdirectories like `a/b.c`) |
+| Offset       | uint64 | Offset relative to start of dataBlock           |
+| Size         | uint64 | Stored size (compressed if FLAG\_COMPRESSED)    |
+| OriginalSize | uint64 | Original uncompressed size (for decompression)  |
+
 
 #### File Data:
-Concatenation of all files' raw contents.  
+Concatenation of all file contents (compressed if FLAG_COMPRESSED).
 Offsets in the file table point into this region.
 
 ---
 
 ## 🔐 Encryption
-- Optional per-package encryption (entire block is encrypted as one).  
+- Optional per-package encryption (entire block is encrypted as one). 
+- Both the file table and file contents are inside the encrypted block, so filenames and metadata are also protected. 
 - **Algorithm**: XSalsa20 + Poly1305 via libsodium crypto_secretbox.
 - **Key derivation**: Argon2i using provided password and stored salt.
 - **Nonce**: Random, stored in `HeaderExtra`.  
 
 If the `FLAG_ENCRYPTED` bit is set, the block must be decrypted before parsing.
+
+---
+
+## 🗜 Compression
+- Compression is per-file, not per-package.
+- Each file is compressed independently using zlib (DEFLATE).
+- OriginalSize in the file table ensures files can be decompressed.
 
 ---
 
@@ -129,7 +160,7 @@ int main() {
 		// Optional: print metadata
 		std::cout << "Archive Developer Signature: " << reader.get_dev_signature() << std::endl;
 		std::cout << "Archive Version: " << reader.get_version() << std::endl;
-		std::cout << "Encrypted? " << (reader.is_encrypted() ? "Yes" : "No") << std::endl;
+		std::cout << "Encrypted? " << (reader.is_encrypted() ? "Yes" : "No") << std::cout << "Compressed? " << (reader.is_compressed() ? "Yes" : "No") << std::endl;
 	} catch (const std::exception& e) {
 		std::cerr << "Error reading archive: " << e.what() << std::endl;
 		return 1;

@@ -1,9 +1,7 @@
-/*
-====================================================
-APKG — Arshavir Package Format
-MIT License - Copyright (c) 2025 arshavir mirzakhani
-====================================================
-*/
+/// =============================
+/// APKG — Arshavir Package Format
+/// MIT License (c) 2025 Arshavir Mirzakhani
+/// =============================
 
 #pragma once
 
@@ -16,18 +14,65 @@ MIT License - Copyright (c) 2025 arshavir mirzakhani
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <zlib.h>
 
-const char MAGIC[4]	      = {'A', 'P', 'K', 'G'};	     // File magic identifier
-const uint32_t FLAG_ENCRYPTED = 0x1;			     // Flag indicating archive is encrypted
-const size_t SALT_SIZE	      = 16;			     // Size of salt for key derivation
-const size_t NONCE_SIZE	      = crypto_secretbox_NONCEBYTES; // XSalsa20 nonce size (24 bytes)
-const size_t KEY_SIZE	      = crypto_secretbox_KEYBYTES;   // XSalsa20 key size (32 bytes)
+/// File format magic identifier
+const char MAGIC[4] = {'A', 'P', 'K', 'G'};
 
-/// Structure representing a file to be added to the archive
+/// Archive flags
+const uint32_t FLAG_ENCRYPTED  = 0x1; ///< Archive contents are encrypted
+const uint32_t FLAG_COMPRESSED = 0x2; ///< Files are individually compressed
+
+/// Crypto parameters
+const size_t SALT_SIZE	= 16;			       ///< Salt size for key derivation
+const size_t NONCE_SIZE = crypto_secretbox_NONCEBYTES; ///< Nonce size for XSalsa20 (24 bytes)
+const size_t KEY_SIZE	= crypto_secretbox_KEYBYTES;   ///< Key size for XSalsa20 (32 bytes)
+
+/// Represents a file being packed into an archive
 struct FileEntry {
-		std::string name;	   // File name inside the archive
-		std::vector<uint8_t> data; // File content
+		std::string name;	   ///< File name inside the archive
+		std::vector<uint8_t> data; ///< File content (compressed or raw depending on settings)
+		size_t original_size = 0;  ///< Original uncompressed file size
 };
+
+/// Represents metadata for a file read from an archive
+struct FileEntryRead {
+		std::string name;	///< File name inside the archive
+		uint64_t offset;	///< Offset of file in data block
+		uint64_t size;		///< Stored size (compressed if FLAG_COMPRESSED)
+		uint64_t original_size; ///< Uncompressed size
+};
+
+/// Compress raw data with zlib (best compression).
+/// @param input Raw data
+/// @return Compressed data
+std::vector<uint8_t> compress_data(const std::vector<uint8_t>& input) {
+	uLongf compressed_size = compressBound(input.size());
+	std::vector<uint8_t> compressed(compressed_size);
+
+	if (compress2(compressed.data(), &compressed_size, input.data(), input.size(), Z_BEST_COMPRESSION) != Z_OK) {
+		throw std::runtime_error("Compression failed");
+	}
+
+	compressed.resize(compressed_size);
+	return compressed;
+}
+
+/// Decompress data using zlib.
+/// @param input Compressed data
+/// @param original_size Expected uncompressed size
+/// @return Decompressed data
+std::vector<uint8_t> decompress_data(const std::vector<uint8_t>& input, size_t original_size) {
+	std::vector<uint8_t> output(original_size);
+	uLongf out_size = original_size;
+
+	if (uncompress(output.data(), &out_size, input.data(), input.size()) != Z_OK) {
+		throw std::runtime_error("Decompression failed");
+	}
+
+	output.resize(out_size);
+	return output;
+}
 
 /// APKGWriter class
 ///
@@ -39,13 +84,16 @@ class APKGWriter {
 		std::string dev_sig;	      // Developer signature stored in archive header
 		std::vector<FileEntry> files; // List of files to include in the archive
 		std::string password;	      // Optional password for encryption
+		bool compress;		      // Optional file compression
 
 	public:
 		/// Constructor
 		/// @param p Path to save the archive
 		/// @param sig Developer signature (default "")
 		/// @param pwd Optional password for encryption
-		APKGWriter(const std::string& p, const std::string& sig = "", const std::string& pwd = "") : path(p), dev_sig(sig), password(pwd) {}
+		/// @param com Optional file compression
+		APKGWriter(const std::string& p, const std::string& sig = "", const std::string& pwd = "", const bool& com = false)
+		    : path(p), dev_sig(sig), password(pwd), compress(com) {}
 
 		/// Add a file to the archive
 		/// @param filepath Path to the source file
@@ -72,14 +120,23 @@ class APKGWriter {
 
 			// Build file table
 			for (auto& file : files) {
+				file.original_size = file.data.size();
+
+				if (compress) {
+					file.data = compress_data(file.data);
+				}
+
 				uint32_t name_len = (uint32_t)file.name.size();
 				file_table.insert(file_table.end(), (uint8_t*)&name_len, (uint8_t*)&name_len + 4);
 				file_table.insert(file_table.end(), file.name.begin(), file.name.end());
 
 				uint64_t offset = current_offset;
 				uint64_t size	= file.data.size();
+				uint64_t orig	= file.original_size;
+
 				file_table.insert(file_table.end(), (uint8_t*)&offset, (uint8_t*)&offset + 8);
 				file_table.insert(file_table.end(), (uint8_t*)&size, (uint8_t*)&size + 8);
+				file_table.insert(file_table.end(), (uint8_t*)&orig, (uint8_t*)&orig + 8);
 
 				file_data.insert(file_data.end(), file.data.begin(), file.data.end());
 				current_offset += size;
@@ -126,6 +183,10 @@ class APKGWriter {
 				flags |= FLAG_ENCRYPTED;
 			}
 
+			if (compress) {
+				flags |= FLAG_COMPRESSED;
+			}
+
 			// Write archive file
 			std::ofstream out(path, std::ios::binary);
 			out.write(MAGIC, 4); // File magic
@@ -159,13 +220,6 @@ class APKGWriter {
 			out.seekp(ftable_offset_pos);
 			out.write((char*)&file_table_offset, 8);
 		}
-};
-
-/// Structure representing a file entry in the archive
-struct FileEntryRead {
-		std::string name; // File name inside archive
-		uint64_t offset;  // Offset relative to start of data block
-		uint64_t size;	  // File size
 };
 
 /// APKGReader class
@@ -258,15 +312,20 @@ class APKGReader {
 			for (uint32_t i = 0; i < file_count; ++i) {
 				uint32_t name_len = *reinterpret_cast<uint32_t*>(block.data() + ptr);
 				ptr += 4;
+
 				std::string name(reinterpret_cast<char*>(block.data() + ptr), name_len);
 				ptr += name_len;
 
 				uint64_t offset = *reinterpret_cast<uint64_t*>(block.data() + ptr);
 				ptr += 8;
+
 				uint64_t size = *reinterpret_cast<uint64_t*>(block.data() + ptr);
 				ptr += 8;
 
-				files.push_back({name, offset, size});
+				uint64_t orig = *reinterpret_cast<uint64_t*>(block.data() + ptr);
+				ptr += 8;
+
+				files.push_back({name, offset, size, orig});
 			}
 
 			// Store remaining block as data_block
@@ -278,7 +337,15 @@ class APKGReader {
 		/// @return Vector of bytes containing file data
 		std::vector<uint8_t> read_file(const std::string& filename) {
 			for (const auto& f : files) {
-				if (f.name == filename) return std::vector<uint8_t>(data_block.begin() + f.offset, data_block.begin() + f.offset + f.size);
+				if (f.name == filename) {
+					std::vector<uint8_t> raw(data_block.begin() + f.offset, data_block.begin() + f.offset + f.size);
+
+					if (flags & FLAG_COMPRESSED) {
+						return decompress_data(raw, f.original_size);
+					}
+
+					return raw;
+				}
 			}
 			throw std::runtime_error("File not found in archive: " + filename);
 		}
@@ -290,8 +357,13 @@ class APKGReader {
 			for (const auto& f : files) {
 				std::filesystem::path outpath = std::filesystem::path(outdir) / f.name;
 				std::filesystem::create_directories(outpath.parent_path());
+
+				std::vector<uint8_t> raw(data_block.begin() + f.offset, data_block.begin() + f.offset + f.size);
+
+				std::vector<uint8_t> output = (flags & FLAG_COMPRESSED) ? decompress_data(raw, f.original_size) : raw;
+
 				std::ofstream out(outpath, std::ios::binary);
-				out.write(reinterpret_cast<const char*>(data_block.data() + f.offset), f.size);
+				out.write(reinterpret_cast<const char*>(output.data()), output.size());
 			}
 		}
 
@@ -303,4 +375,7 @@ class APKGReader {
 
 		/// Check if archive is encrypted
 		bool is_encrypted() const { return flags & FLAG_ENCRYPTED; }
+
+		/// Check if archive is compressed
+		bool is_compressed() const { return flags & FLAG_COMPRESSED; }
 };
