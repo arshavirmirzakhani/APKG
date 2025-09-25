@@ -2,6 +2,22 @@
 /// APKG — Arshavir Package Format
 /// MIT License (c) 2025 Arshavir Mirzakhani
 /// =============================
+///
+/// Format overview:
+///   [ MAGIC(4) | version(4) | flags(4) ]
+///   [ dev_sig_len(4) | dev_sig(...) ]
+///   [ file_count(4) ]
+///   [ ftable_offset(8) | ftable_size(8) | fdata_offset(8) ]
+///   [ header_extra (salt/nonce if encrypted) ]
+///   [ file_table entries ]
+///   [ file_data block ]
+///
+/// Each file_table entry:
+///   [ name_len(4) | name(...) | offset(8) | size(8) | original_size(8) ]
+///
+/// Offsets are relative to start of file_data block.
+/// Compression/encryption applies only to file_data.
+///
 
 #pragma once
 
@@ -107,21 +123,23 @@ class APKGWriter {
 			files.push_back({arcname.empty() ? std::filesystem::path(filepath).filename().string() : arcname, data});
 		}
 
-		/// Save the archive to disk
+		/// Save the archive to disk.
 		///
-		/// This function performs the following steps:
-		/// 1. Builds the file table and concatenates all file data
-		/// 2. Optionally encrypts the data using password-derived key
-		/// 3. Writes the header, optional encryption metadata, and file block
+		/// Steps:
+		///  1. Build a metadata table for all files (name, offset, size, original_size).
+		///  2. Concatenate all file contents into a single file_data block.
+		///  3. Optionally compress individual files.
+		///  4. Optionally encrypt the file_data block (metadata remains plaintext).
+		///  5. Write header + metadata + data in the format.
+
 		void save() {
-			std::vector<uint8_t> file_table; // Stores file names, offsets, and sizes
+			std::vector<uint8_t> file_table; // Metadata block
 			std::vector<uint8_t> file_data;	 // Concatenated file contents
 			uint64_t current_offset = 0;
 
-			// Build file table
+			// Build metadata + file_data
 			for (auto& file : files) {
 				file.original_size = file.data.size();
-
 				if (compress) {
 					file.data = compress_data(file.data);
 				}
@@ -142,44 +160,36 @@ class APKGWriter {
 				current_offset += size;
 			}
 
-			// Combine file table and file data
-			std::vector<uint8_t> block = file_table;
-			block.insert(block.end(), file_data.begin(), file_data.end());
-
 			uint32_t flags = 0;
-			std::vector<uint8_t> header_extra; // Stores salt & nonce if encrypted
+			std::vector<uint8_t> header_extra;
 
-			// Encrypt the block if password is provided
+			// Optional encryption step
+			std::vector<uint8_t> final_data = file_data;
 			if (!password.empty()) {
-				// Generate random salt for key derivation
 				std::vector<uint8_t> salt(SALT_SIZE);
 				randombytes_buf(salt.data(), SALT_SIZE);
 
-				// Derive key from password and salt using Argon2i
 				std::vector<uint8_t> key(KEY_SIZE);
 				if (crypto_pwhash(key.data(), KEY_SIZE, password.c_str(), password.size(), salt.data(), crypto_pwhash_OPSLIMIT_MODERATE,
 						  crypto_pwhash_MEMLIMIT_MODERATE, crypto_pwhash_ALG_ARGON2I13) != 0) {
 					throw std::runtime_error("Key derivation failed");
 				}
 
-				// Generate random nonce for SecretBox encryption
 				std::vector<uint8_t> nonce(NONCE_SIZE);
 				randombytes_buf(nonce.data(), NONCE_SIZE);
 
-				// Encrypt the combined block
-				std::vector<uint8_t> cipher(block.size() + crypto_secretbox_MACBYTES);
-				if (crypto_secretbox_easy(cipher.data(), block.data(), block.size(), nonce.data(), key.data()) != 0) {
+				std::vector<uint8_t> cipher(final_data.size() + crypto_secretbox_MACBYTES);
+				if (crypto_secretbox_easy(cipher.data(), final_data.data(), final_data.size(), nonce.data(), key.data()) != 0) {
 					throw std::runtime_error("Encryption failed");
 				}
 
-				// Store salt and nonce in header
+				// Store salt + nonce into header
 				header_extra.insert(header_extra.end(), (uint8_t*)&SALT_SIZE, (uint8_t*)&SALT_SIZE + 4);
 				header_extra.insert(header_extra.end(), salt.begin(), salt.end());
 				header_extra.insert(header_extra.end(), (uint8_t*)&NONCE_SIZE, (uint8_t*)&NONCE_SIZE + 4);
 				header_extra.insert(header_extra.end(), nonce.begin(), nonce.end());
 
-				// Replace plaintext block with encrypted ciphertext
-				block = cipher;
+				final_data = std::move(cipher);
 				flags |= FLAG_ENCRYPTED;
 			}
 
@@ -187,13 +197,13 @@ class APKGWriter {
 				flags |= FLAG_COMPRESSED;
 			}
 
-			// Write archive file
+			// === Write file ===
 			std::ofstream out(path, std::ios::binary);
-			out.write(MAGIC, 4); // File magic
+			out.write(MAGIC, 4);
 
-			uint32_t version = 1;
-			out.write((char*)&version, 4); // Version number
-			out.write((char*)&flags, 4);   // Flags
+			uint32_t version = 1; // version 1
+			out.write((char*)&version, 4);
+			out.write((char*)&flags, 4);
 
 			// Developer signature
 			uint32_t sig_len = (uint32_t)dev_sig.size();
@@ -204,154 +214,165 @@ class APKGWriter {
 			uint32_t file_count = (uint32_t)files.size();
 			out.write((char*)&file_count, 4);
 
-			// Placeholder for file_table offset
-			uint64_t ftable_offset_pos = out.tellp();
-			uint64_t placeholder	   = 0;
-			out.write((char*)&placeholder, 8);
+			// Reserve spots for offsets
+			uint64_t ftable_offset = 0, ftable_size = 0, fdata_offset = 0;
+			std::streampos ftable_offset_pos = out.tellp();
+			out.write((char*)&ftable_offset, 8);
+			out.write((char*)&ftable_size, 8);
+			out.write((char*)&fdata_offset, 8);
 
-			// Write header_extra (salt + nonce)
+			// Write header_extra
 			out.write((char*)header_extra.data(), header_extra.size());
 
-			// Write file table + data block
-			uint64_t file_table_offset = out.tellp();
-			out.write((char*)block.data(), block.size());
+			// Write file_table
+			ftable_offset = out.tellp();
+			ftable_size   = file_table.size();
+			out.write((char*)file_table.data(), ftable_size);
 
-			// Backpatch the file_table offset
+			// Write file_data (or encrypted data block)
+			fdata_offset = out.tellp();
+			out.write((char*)final_data.data(), final_data.size());
+
+			// Backpatch offsets
 			out.seekp(ftable_offset_pos);
-			out.write((char*)&file_table_offset, 8);
+			out.write((char*)&ftable_offset, 8);
+			out.write((char*)&ftable_size, 8);
+			out.write((char*)&fdata_offset, 8);
 		}
 };
 
 /// APKGReader class
 ///
-/// This class provides functionality to read APKG archives with optional
-/// Decryption if password provided. Decryption uses libsodium SecretBox (XSalsa20 + Poly1305) with
-/// Argon2i key derivation.
-
+/// Reads APKG archives.
+/// layout:
+///   [MAGIC | version | flags | dev_sig | file_count | ftable_offset | ftable_size | fdata_offset]
+///   [header_extra (if encrypted)]
+///   [file_table (metadata only)]
+///   [file_data (all contents concatenated or encrypted)]
+///
 class APKGReader {
 		std::string path;		  // Archive file path
-		std::vector<FileEntryRead> files; // List of file entries
-		std::vector<uint8_t> data_block;  // Concatenated file data
-		std::string dev_sig;		  // Developer signature from header
+		std::vector<FileEntryRead> files; // File metadata entries
+		std::vector<uint8_t> data_block;  // File contents (possibly decrypted)
+		std::string dev_sig;		  // Developer signature
 		uint32_t version;		  // Archive version
-		uint32_t flags;			  // Archive flags (encryption, etc.)
-
+		uint32_t flags;			  // Flags
 	public:
-		/// Constructor
-		/// @param p Archive file path
-		/// @param password Optional password for decryption if archive is encrypted
 		APKGReader(const std::string& p, const std::string& password = "") : path(p) {
 			std::ifstream in(path, std::ios::binary);
 			if (!in) throw std::runtime_error("Failed to open file: " + path);
 
-			// Read and verify magic
+			// Magic check
 			char magic[4];
 			in.read(magic, 4);
-			if (std::memcmp(magic, MAGIC, 4) != 0) throw std::runtime_error("Invalid APKG file");
+			if (std::memcmp(magic, MAGIC, 4) != 0) {
+				throw std::runtime_error("Invalid APKG file");
+			}
 
-			// Read version and flags
+			// Header
 			in.read(reinterpret_cast<char*>(&version), 4);
 			in.read(reinterpret_cast<char*>(&flags), 4);
 
-			// Read developer signature
+			// Signature
 			uint32_t sig_len;
 			in.read(reinterpret_cast<char*>(&sig_len), 4);
 			dev_sig.resize(sig_len);
 			in.read(dev_sig.data(), sig_len);
 
-			// Read file count
+			// File count
 			uint32_t file_count;
 			in.read(reinterpret_cast<char*>(&file_count), 4);
 
-			// Read file_table offset
-			uint64_t file_table_offset;
-			in.read(reinterpret_cast<char*>(&file_table_offset), 8);
+			// === NEW FORMAT (separated metadata & data) ===
+			uint64_t ftable_offset, ftable_size, fdata_offset;
+			in.read(reinterpret_cast<char*>(&ftable_offset), 8);
+			in.read(reinterpret_cast<char*>(&ftable_size), 8);
+			in.read(reinterpret_cast<char*>(&fdata_offset), 8);
 
-			// Read optional header_extra (salt + nonce)
-			std::vector<uint8_t> header_extra;
-			if (file_table_offset > in.tellg()) {
-				size_t header_extra_len = file_table_offset - in.tellg();
-				header_extra.resize(header_extra_len);
-				in.read(reinterpret_cast<char*>(header_extra.data()), header_extra_len);
-			}
+			// Read header_extra (salt + nonce)
+			std::streampos pos_after_offsets = in.tellg();
+			size_t header_extra_len		 = ftable_offset - pos_after_offsets;
+			std::vector<uint8_t> header_extra(header_extra_len);
+			in.read(reinterpret_cast<char*>(header_extra.data()), header_extra_len);
 
-			// Read the remaining block (file table + data)
+			// Read file_table
+			in.seekg(ftable_offset);
+			std::vector<uint8_t> file_table(ftable_size);
+			in.read(reinterpret_cast<char*>(file_table.data()), ftable_size);
+
+			// Read file_data (possibly encrypted)
+			in.seekg(fdata_offset);
 			std::vector<uint8_t> block((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 
-			// Decrypt if needed
+			// Decrypt file data if needed
 			if (flags & FLAG_ENCRYPTED) {
 				if (password.empty()) throw std::runtime_error("Archive is encrypted but no password provided");
-
-				size_t ptr	  = 0;
-				uint32_t salt_len = *reinterpret_cast<uint32_t*>(header_extra.data() + ptr);
-				ptr += 4;
-				std::vector<uint8_t> salt(header_extra.begin() + ptr, header_extra.begin() + ptr + salt_len);
-				ptr += salt_len;
-
-				uint32_t nonce_len = *reinterpret_cast<uint32_t*>(header_extra.data() + ptr);
-				ptr += 4;
-				std::vector<uint8_t> nonce(header_extra.begin() + ptr, header_extra.begin() + ptr + nonce_len);
-
-				// Derive key from password + salt using Argon2i
-				std::vector<uint8_t> key(KEY_SIZE);
-				if (crypto_pwhash(key.data(), KEY_SIZE, password.c_str(), password.size(), salt.data(), crypto_pwhash_OPSLIMIT_MODERATE,
-						  crypto_pwhash_MEMLIMIT_MODERATE, crypto_pwhash_ALG_ARGON2I13) != 0) {
-					throw std::runtime_error("Key derivation failed");
-				}
-
-				// Decrypt the block
-				std::vector<uint8_t> decrypted(block.size() - crypto_secretbox_MACBYTES);
-				if (crypto_secretbox_open_easy(decrypted.data(), block.data(), block.size(), nonce.data(), key.data()) != 0) {
-					throw std::runtime_error("Decryption failed or archive tampered with");
-				}
-				block = std::move(decrypted);
+				block = decrypt_block(block, header_extra, password);
 			}
 
 			// Parse file table
 			size_t ptr = 0;
 			for (uint32_t i = 0; i < file_count; ++i) {
-				uint32_t name_len = *reinterpret_cast<uint32_t*>(block.data() + ptr);
+				uint32_t name_len = *reinterpret_cast<uint32_t*>(file_table.data() + ptr);
 				ptr += 4;
 
-				std::string name(reinterpret_cast<char*>(block.data() + ptr), name_len);
+				std::string name(reinterpret_cast<char*>(file_table.data() + ptr), name_len);
 				ptr += name_len;
 
-				uint64_t offset = *reinterpret_cast<uint64_t*>(block.data() + ptr);
+				uint64_t offset = *reinterpret_cast<uint64_t*>(file_table.data() + ptr);
 				ptr += 8;
-
-				uint64_t size = *reinterpret_cast<uint64_t*>(block.data() + ptr);
+				uint64_t size = *reinterpret_cast<uint64_t*>(file_table.data() + ptr);
 				ptr += 8;
-
-				uint64_t orig = *reinterpret_cast<uint64_t*>(block.data() + ptr);
+				uint64_t orig = *reinterpret_cast<uint64_t*>(file_table.data() + ptr);
 				ptr += 8;
 
 				files.push_back({name, offset, size, orig});
 			}
 
-			// Store remaining block as data_block
-			data_block.assign(block.begin() + ptr, block.end());
+			data_block = std::move(block);
 		}
 
-		/// Read a specific file into memory
-		/// @param filename Name of the file inside archive
-		/// @return Vector of bytes containing file data
+		/// Decrypt helper
+		static std::vector<uint8_t> decrypt_block(const std::vector<uint8_t>& block, const std::vector<uint8_t>& header_extra,
+							  const std::string& password) {
+			size_t ptr	  = 0;
+			uint32_t salt_len = *reinterpret_cast<const uint32_t*>(header_extra.data() + ptr);
+			ptr += 4;
+			std::vector<uint8_t> salt(header_extra.begin() + ptr, header_extra.begin() + ptr + salt_len);
+			ptr += salt_len;
+
+			uint32_t nonce_len = *reinterpret_cast<const uint32_t*>(header_extra.data() + ptr);
+			ptr += 4;
+			std::vector<uint8_t> nonce(header_extra.begin() + ptr, header_extra.begin() + ptr + nonce_len);
+
+			std::vector<uint8_t> key(KEY_SIZE);
+			if (crypto_pwhash(key.data(), KEY_SIZE, password.c_str(), password.size(), salt.data(), crypto_pwhash_OPSLIMIT_MODERATE,
+					  crypto_pwhash_MEMLIMIT_MODERATE, crypto_pwhash_ALG_ARGON2I13) != 0) {
+				throw std::runtime_error("Key derivation failed");
+			}
+
+			std::vector<uint8_t> decrypted(block.size() - crypto_secretbox_MACBYTES);
+			if (crypto_secretbox_open_easy(decrypted.data(), block.data(), block.size(), nonce.data(), key.data()) != 0) {
+				throw std::runtime_error("Decryption failed or archive tampered with");
+			}
+			return decrypted;
+		}
+
+		/// Read a file
 		std::vector<uint8_t> read_file(const std::string& filename) {
 			for (const auto& f : files) {
 				if (f.name == filename) {
 					std::vector<uint8_t> raw(data_block.begin() + f.offset, data_block.begin() + f.offset + f.size);
-
 					if (flags & FLAG_COMPRESSED) {
 						return decompress_data(raw, f.original_size);
 					}
-
 					return raw;
 				}
 			}
 			throw std::runtime_error("File not found in archive: " + filename);
 		}
 
-		/// Extract all files to a directory
-		/// @param outdir Output directory path
+		/// Extract all files
 		void extract_all(const std::string& outdir) {
 			std::filesystem::create_directories(outdir);
 			for (const auto& f : files) {
@@ -359,7 +380,6 @@ class APKGReader {
 				std::filesystem::create_directories(outpath.parent_path());
 
 				std::vector<uint8_t> raw(data_block.begin() + f.offset, data_block.begin() + f.offset + f.size);
-
 				std::vector<uint8_t> output = (flags & FLAG_COMPRESSED) ? decompress_data(raw, f.original_size) : raw;
 
 				std::ofstream out(outpath, std::ios::binary);
@@ -367,15 +387,8 @@ class APKGReader {
 			}
 		}
 
-		/// Get the developer signature stored in the archive
 		std::string get_dev_signature() const { return dev_sig; }
-
-		/// Get the archive version
 		uint32_t get_version() const { return version; }
-
-		/// Check if archive is encrypted
 		bool is_encrypted() const { return flags & FLAG_ENCRYPTED; }
-
-		/// Check if archive is compressed
 		bool is_compressed() const { return flags & FLAG_COMPRESSED; }
 };
