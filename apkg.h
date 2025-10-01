@@ -92,6 +92,7 @@ std::vector<uint8_t> decompress_data(const std::vector<uint8_t>& input, size_t o
 
 // APKGWriter class
 //
+// Writes APKG archives.
 // This class provides functionality to create APKG archives with optional
 // encryption. Encryption uses libsodium SecretBox (XSalsa20 + Poly1305) with
 // Argon2i key derivation.
@@ -244,12 +245,6 @@ class APKGWriter {
 // APKGReader class
 //
 // Reads APKG archives.
-// layout:
-//   [MAGIC | version | flags | dev_sig | file_count | ftable_offset | ftable_size | fdata_offset]
-//   [header_extra (if encrypted)]
-//   [file_table (metadata only)]
-//   [file_data (all contents concatenated or encrypted)]
-//
 class APKGReader {
 		std::string path;		  // Archive file path
 		std::vector<FileEntryRead> files; // File metadata entries
